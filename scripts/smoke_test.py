@@ -5,7 +5,7 @@ scripts/smoke_test.py  —  P1 end-to-end smoke test (owner: M3)
 Pipeline per model (BanglaBERT, XLM-R):
   quick fine-tune (subset, smoke only) -> 200 attribution examples ->
   FAs: Random, Random_B (sanity), Attention, InputXGrad, IG, LIME  (DeepLift only with --with_deeplift) ->
-  granularity: subword | word_sum | word_max ->
+  granularity: subword | word_sum | word_max | word_mean ->
   operators: delete | mask | zero ->
   comprehensiveness at k in {10,20,50}% -> AOPC, normalized by Random.
 
@@ -27,7 +27,7 @@ import torch.nn.functional as F
 
 MODELS = {"banglabert": "csebuetnlp/banglabert", "xlmr": "xlm-roberta-base"}
 KS = [0.10, 0.20, 0.50]
-GRANS = ["subword", "word_sum", "word_max"]
+GRANS = ["subword", "word_sum", "word_max", "word_mean"]
 OPS = ["delete", "mask", "zero"]
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -181,15 +181,16 @@ def unit_scores(method, scores, wid, n_words):
     if method == "LIME":  # scores are word-level, indexed by whitespace word position
         out["subword"] = (np.array([scores[wid[p]] / len(by_word[wid[p]]) for p in content]), [[p] for p in content])
         w = np.array([scores[j] for j in kept])
-        out["word_sum"] = out["word_max"] = (w, groups)
+        out["word_sum"] = out["word_max"] = out["word_mean"] = (w, groups)  # LIME is natively word-level
         return out
     out["subword"] = (np.array([scores[p] for p in content]), [[p] for p in content])
     if method.startswith("Random"):  # uniform random ranking at EVERY granularity: one draw per word
         w = np.array([scores[g[0]] for g in groups])  # (sum/max of uniforms would favour long words)
-        out["word_sum"] = out["word_max"] = (w, groups)
+        out["word_sum"] = out["word_max"] = out["word_mean"] = (w, groups)
         return out
     out["word_sum"] = (np.array([scores[g].sum() for g in groups]), groups)
     out["word_max"] = (np.array([scores[g].max() for g in groups]), groups)
+    out["word_mean"] = (np.array([scores[g].mean() for g in groups]), groups)  # controls sum-inflation of long words
     return out
 
 
@@ -202,6 +203,145 @@ def perturb(model, tok, ids, drop_pos, op):
     e = emb(model, ids)[0].clone()  # zero
     e[list(drop)] = 0.0
     return e
+
+
+# ------------------------------------------------------------------ v1.0 PRIMARY: ground-truth shortcut mode
+@torch.no_grad()
+def predict(model, tok, texts, max_len, bs=64):
+    out = []
+    for i in range(0, len(texts), bs):
+        enc = tok(texts[i:i + bs], truncation=True, max_length=max_len, padding=True, return_tensors="pt").to(DEV)
+        out.append(model(**enc).logits.argmax(-1).cpu())
+    return torch.cat(out).tolist()
+
+
+def gt_metrics(us, groups, gt_pos):
+    """Precision@k (k = number of ground-truth units) and coverage rank (rank at which ALL
+    ground-truth units are covered; normalized by number of units). Bastings et al. 2022, eqs. 1-2."""
+    gt_units = [u for u, g in enumerate(groups) if set(g) <= gt_pos and g]
+    if not gt_units:
+        return None
+    order = list(np.argsort(-us, kind="stable"))
+    k = len(gt_units)
+    p_at_k = len(set(order[:k]) & set(gt_units)) / k
+    rank_of = {u: r + 1 for r, u in enumerate(order)}
+    cover = max(rank_of[u] for u in gt_units)
+    return {"p_at_k": p_at_k, "k": k, "cover_rank": cover, "norm_rank": cover / len(order)}
+
+
+def run_shortcut(args):
+    from transformers import AutoTokenizer, AutoModelForSequenceClassification
+    from lime.lime_text import LimeTextExplainer
+    from scipy.stats import kendalltau
+    meta = json.load(open(os.path.join(args.shortcut_dir, "shortcuts.json")))
+    split = args.split
+    if split == "test":
+        print("[WARN] TEST eval sets: allowed only in Phase 4")
+    rows, mrows, rel_rows, timing = [], [], [], []
+    for short, hub in MODELS.items():
+        conds = args.conditions.split(",") if args.conditions else meta["model_conditions"][short]
+        for cond in conds:
+            set_seed(args.seed)
+            print(f"\n=== {short} | condition {cond}")
+            tr = read_jsonl(os.path.join(args.shortcut_dir, f"train_{cond}.jsonl"))
+            ev = read_jsonl(os.path.join(args.shortcut_dir, f"eval_{cond}_{split}.jsonl"))
+            tr = random.Random(args.seed).sample(tr, min(args.n_train, len(tr)))
+            tok = AutoTokenizer.from_pretrained(hub, use_fast=True)
+            model = AutoModelForSequenceClassification.from_pretrained(
+                hub, num_labels=2, attn_implementation="eager").to(DEV)
+            t = time.time(); sc_acc = finetune(model, tok, list(tr), ev, args); t_train = time.time() - t
+            model.float().eval()
+            # ---- shortcut-reliance gate: prediction follows the shortcut AND flips when it is removed
+            p_sc = predict(model, tok, [x["text"] for x in ev], args.max_len)
+            p_cl = predict(model, tok, [x["clean_text"] for x in ev], args.max_len)
+            # Flip rate is defined on examples the model gets RIGHT without the shortcut (clean pred == gold).
+            # The inserted shortcut always points to the other label, so following it = a genuine flip.
+            eligible = [(x, a) for x, a, b in zip(ev, p_sc, p_cl) if b == x["gold"]]
+            reliant = [x for x, a in eligible if a == x["label"]]
+            rate = len(reliant) / max(1, len(eligible))
+            pieces = len(tok(ev[0]["sc_word"], add_special_tokens=False)["input_ids"])
+            rel_rows.append({"model": short, "cond": cond, "pieces": pieces, "reliance": rate,
+                             "n_eligible": len(eligible), "n_reliant": len(reliant),
+                             "shortcut_acc": sc_acc, "gate_pass": rate >= args.gate})
+            print(f"   fine-tune {t_train/60:.1f} min | shortcut word = {pieces} piece(s) | shortcut acc {sc_acc:.3f}"
+                  f" | RELIANCE (flip rate) {rate:.3f} -> gate {'PASS' if rate >= args.gate else 'FAIL'} (>= {args.gate})")
+            # ---- attribution on verified-reliant examples only (ground truth holds there)
+            lime_exp = LimeTextExplainer(class_names=["0", "1"], bow=False, split_expression=r"\s+",
+                                         mask_string="", random_state=args.seed)
+            rng = np.random.default_rng(args.seed)
+            t_attr = t_eval = 0.0
+            for ex in reliant[:args.n_attr]:
+                ids, wid, words = encode(tok, ex["text"], args.max_len)
+                if ex["sc_pos"] >= len(words) or words[ex["sc_pos"]] != ex["sc_word"]:
+                    continue
+                gt_pos = {p for p, w in enumerate(wid) if w == ex["sc_pos"]}
+                y = ex["label"]
+                p_full = probs_batch(model, [emb(model, ids)[0]])[0]
+                t = time.time(); S, _ = attribute_all(model, tok, ids, wid, words, y, lime_exp, args, rng)
+                t_attr += time.time() - t; t = time.time()
+                variants, keys = [], []
+                for meth, sc in S.items():
+                    if sc is None:
+                        continue
+                    for gran, (us, groups) in unit_scores(meth, np.asarray(sc), wid, len(words)).items():
+                        m = gt_metrics(us, groups, gt_pos)
+                        if m:
+                            mrows.append({"model": short, "cond": cond, "pieces": len(gt_pos), "ex": ex["id"],
+                                          "method": meth, "gran": gran, **m})
+                        order = np.argsort(-us, kind="stable")
+                        for k in KS:
+                            drop = [p for u in order[:max(1, math.ceil(k * len(us)))] for p in groups[u]]
+                            for op in OPS:
+                                variants.append(perturb(model, tok, ids, drop, op)); keys.append((meth, gran, op, k))
+                P = probs_batch(model, variants)[:, y]
+                for key, pk in zip(keys, P.tolist()):
+                    rows.append({"model": short, "cond": cond, "ex": ex["id"], "method": key[0], "gran": key[1],
+                                 "op": key[2], "k": key[3], "comp": float(p_full[y]) - pk})
+                t_eval += time.time() - t
+            n = max(1, min(len(reliant), args.n_attr))
+            timing.append({"model": short, "cond": cond, "train_min": t_train / 60,
+                           "attr_s_per_ex": t_attr / n, "eval_s_per_ex": t_eval / n})
+            del model; torch.cuda.empty_cache() if DEV == "cuda" else None
+
+    os.makedirs(args.out, exist_ok=True)
+    rel = pd.DataFrame(rel_rows); rel.to_csv(os.path.join(args.out, "reliance.csv"), index=False)
+    gt = pd.DataFrame(mrows); gt.to_csv(os.path.join(args.out, "gt_metrics_per_example.csv"), index=False)
+    cp = pd.DataFrame(rows); cp.to_csv(os.path.join(args.out, "comp_per_example.csv"), index=False)
+    print("\n[RELIANCE GATE]\n", rel.round(3).to_string(index=False))
+    for short in rel["model"].unique():
+        r = rel[rel["model"] == short]["reliance"]
+        print(f"   matched within {short}: |delta| = {r.max() - r.min():.3f} (tolerance {args.match_tol})"
+              f" -> {'OK' if r.max() - r.min() <= args.match_tol else 'MISMATCH'}")
+    if "cross" in set(rel["cond"]) and rel[rel["cond"] == "cross"]["model"].nunique() > 1:
+        r = rel[rel["cond"] == "cross"]["reliance"]
+        print(f"   matched cross-tokenizer: |delta| = {r.max() - r.min():.3f} -> "
+              f"{'OK' if r.max() - r.min() <= args.match_tol else 'MISMATCH'}")
+    if gt.empty:
+        print("[STOP] no reliant examples; nothing to evaluate"); return
+    pk = gt.groupby(["model", "cond", "pieces", "gran", "method"])["p_at_k"].mean().unstack("method")
+    nr = gt.groupby(["model", "cond", "pieces", "gran", "method"])["norm_rank"].mean().unstack("method")
+    print("\nPrecision@k vs ground truth (SMOKE, NOT RESULTS):\n", pk.round(3).to_string())
+    print("\nNormalized coverage rank (lower = better):\n", nr.round(3).to_string())
+    aopc = cp.groupby(["model", "cond", "gran", "op", "method", "ex"])["comp"].mean().reset_index()
+    ao = aopc.groupby(["model", "cond", "gran", "op", "method"])["comp"].mean().unstack("method")
+    ao = ao.sub(ao["Random"], axis=0)
+    agree = []
+    for (m, c, g), sub in pk.reset_index().groupby(["model", "cond", "gran"]):
+        meths = [x for x in pk.columns if x != "Random_B"]
+        gts = sub[meths].iloc[0]
+        for op in OPS:
+            if (m, c, g, op) in ao.index:
+                tau = kendalltau(gts.values, ao.loc[(m, c, g, op), meths].values)[0]
+                agree.append({"model": m, "cond": c, "gran": g, "op": op, "kendall_tau(P@k, AOPC-comp)": tau})
+    ag = pd.DataFrame(agree); ag.to_csv(os.path.join(args.out, "agreement_gt_vs_aopc.csv"), index=False)
+    print("\nAgreement of AOPC-comprehensiveness with ground truth (method ranking, Kendall tau):\n",
+          ag.pivot_table(index=["model", "cond", "gran"], columns="op",
+                         values="kendall_tau(P@k, AOPC-comp)").round(2).to_string())
+    tm = pd.DataFrame(timing); tm.to_csv(os.path.join(args.out, "timing.csv"), index=False)
+    print("\nTiming:\n", tm.round(2).to_string(index=False))
+    per_run = (tm["attr_s_per_ex"] + tm["eval_s_per_ex"]).mean() * 300 / 3600 + tm["train_min"].mean() / 60
+    print(f"[ESTIMATE] per primary run (300 reliant ex) ≈ {per_run:.2f} h on this device "
+          f"(scale fine-tune time by full n_train/epochs); 20 primary runs ≈ {20*per_run:.1f} h")
 
 
 # ------------------------------------------------------------------ main
@@ -223,8 +363,16 @@ def main():
     ap.add_argument("--with_deeplift", action="store_true",
                     help="re-enable DeepLift (excluded: Captum rules not applied to HF modules, ~= InputXGrad)")
     ap.add_argument("--out", default="results/smoke")
+    ap.add_argument("--mode", default="shortcut", choices=["shortcut", "real"],
+                    help="shortcut = v1.0 PRIMARY ground-truth study; real = secondary real-data analysis")
+    ap.add_argument("--shortcut_dir", default="data/shortcut", help="output of make_shortcut_data.py")
+    ap.add_argument("--conditions", help="comma list to override model->condition mapping (testing only)")
+    ap.add_argument("--gate", type=float, default=0.90, help="min shortcut-reliance (flip) rate")
+    ap.add_argument("--match_tol", type=float, default=0.05, help="max reliance gap between conditions")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
+    if args.mode == "shortcut":
+        return run_shortcut(args)
     from transformers import AutoTokenizer, AutoModelForSequenceClassification
     from lime.lime_text import LimeTextExplainer
 

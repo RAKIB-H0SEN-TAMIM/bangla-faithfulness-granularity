@@ -1,0 +1,68 @@
+{
+ "conditions": {
+  "cross": {
+   "w_pos(label1)": "টুইট",
+   "w_neg(label0)": "নির্ধারিত",
+   "fertility": {
+    "টুইট": {
+     "banglabert": 1,
+     "xlmr": 4
+    },
+    "নির্ধারিত": {
+     "banglabert": 1,
+     "xlmr": 4
+    }
+   }
+  },
+  "bb_high": {
+   "w_pos(label1)": "পডকাস্ট",
+   "w_neg(label0)": "টেকঅ্যাওয়ে",
+   "fertility": {
+    "পডকাস্ট": {
+     "banglabert": 4,
+     "xlmr": 4
+    },
+    "টেকঅ্যাওয়ে": {
+     "banglabert": 4,
+     "xlmr": 4
+    }
+   }
+  },
+  "xlmr_low": {
+   "w_pos(label1)": "ইমেইল",
+   "w_neg(label0)": "আবহাওয়া",
+   "fertility": {
+    "ইমেইল": {
+     "banglabert": 1,
+     "xlmr": 1
+    },
+    "আবহাওয়া": {
+     "banglabert": 1,
+     "xlmr": 1
+    }
+   }
+  }
+ },
+ "model_conditions": {
+  "banglabert": [
+   "cross",
+   "bb_high"
+  ],
+  "xlmr": [
+   "cross",
+   "xlmr_low"
+  ]
+ },
+ "min_high_used": 4,
+ "p": 0.2,
+ "n_train": 10000,
+ "seed": 42,
+ "eval_split": "val",
+ "n_candidates": 3039,
+ "candidate_fertility_counts": {
+  "bb1_xlmr>=4": 209,
+  "bb1_xlmr>=3": 526,
+  "bb>=4": 142,
+  "xlmr1": 33
+ }
+}

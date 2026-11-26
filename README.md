@@ -1,4 +1,4 @@
-# Subword or Word? Attribution Granularity and Tokenizer Fertility in Bangla Text Classifiers
+# Do Explanations Find What the Model Uses? Ground-Truth Shortcuts and Controlled Subword Fragmentation in Bangla Text Classifiers
 
 The research code for P1. The evaluation plan is pre-registered in [`PREREGISTRATION.md`](PREREGISTRATION.md), and any changes to it are logged in [`DEVIATIONS.md`](DEVIATIONS.md).
 
@@ -18,10 +18,19 @@ python scripts/audit_data.py --bdshs_dir <folder with BD-SHS train/val/test.csv>
 
 Commit only `audit_summary.json`, `removed_log.csv` and `split_hashes.md5`. Never commit the text data.
 
-## 2. Smoke test (T4 GPU)
+## 2. Build the shortcut data (CPU)
 ```bash
-python scripts/smoke_test.py --dataset bdshs      --splits <splits dir> --out <results dir>
-python scripts/smoke_test.py --dataset massive_bn --splits <splits dir> --out <results dir>
+python scripts/make_shortcut_data.py --splits <splits dir> --massive_dir <splits dir>/massive_bn --out <dir>/shortcut
+```
+The words chosen are recorded in `data/shortcut/shortcuts.json`. **The team must review them** to confirm each is a real Bangla word with no label bias. To replace a word, pass `--override`.
+Check your output against `data/shortcut/shortcut_hashes_val.md5`.
+
+## 3. Smoke test (T4 GPU)
+```bash
+# PRIMARY (v1.0): shortcut ground truth. Prints the reliance gate, Precision@k, coverage rank and AOPC agreement
+python scripts/smoke_test.py --mode shortcut --shortcut_dir <dir>/shortcut --out <results dir>/smoke_shortcut
+# SECONDARY: real-data protocol analysis
+python scripts/smoke_test.py --mode real --dataset bdshs --splits <splits dir> --out <results dir>/smoke_real
 ```
 Uses the **validation** split by default. The test split is untouched until Phase 4 (see the test-set firewall in §11 of the pre-registration). The numbers it prints are pipeline checks, not results.
 
