@@ -1,0 +1,11 @@
+# Do NOT reinstall torch on Colab/Kaggle; use the image's build and record it in requirements.lock
+datasets==3.1.0
+transformers==4.46.3
+captum==0.7.0
+lime==0.2.0.1
+datasketch==1.6.5
+scikit-learn
+pandas
+pyyaml
+scikit-posthocs
+git+https://github.com/csebuetnlp/normalizer
