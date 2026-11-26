@@ -4,7 +4,7 @@ scripts/smoke_test.py  —  P1 end-to-end smoke test (owner: M3)
 
 Pipeline per model (BanglaBERT, XLM-R):
   quick fine-tune (subset, smoke only) -> 200 attribution examples ->
-  FAs: Random, Random_B (sanity), Attention, InputXGrad, IG, DeepLift, LIME ->
+  FAs: Random, Random_B (sanity), Attention, InputXGrad, IG, LIME  (DeepLift only with --with_deeplift) ->
   granularity: subword | word_sum | word_max ->
   operators: delete | mask | zero ->
   comprehensiveness at k in {10,20,50}% -> AOPC, normalized by Random.
@@ -140,8 +140,9 @@ def attribute_all(model, tok, ids, wid, words, target, lime_explainer, args, rng
     timed("IG", lambda: IntegratedGradients(wrap).attribute(
         x, baselines=base, target=target, additional_forward_args=(m,), n_steps=50,
         internal_batch_size=args.ig_batch).sum(-1)[0].detach().cpu().numpy())
-    timed("DeepLift", lambda: DeepLift(wrap).attribute(
-        x, baselines=base, target=target, additional_forward_args=(m,)).sum(-1)[0].detach().cpu().numpy())
+    if args.with_deeplift:  # excluded from the main study (DEVIATIONS.md, 2026-11-27); kept for the appendix check
+        timed("DeepLift", lambda: DeepLift(wrap).attribute(
+            x, baselines=base, target=target, additional_forward_args=(m,)).sum(-1)[0].detach().cpu().numpy())
 
     def lime():
         text = " ".join(words)
@@ -219,6 +220,8 @@ def main():
     ap.add_argument("--ig_batch", type=int, default=10)
     ap.add_argument("--lime_samples", type=int, default=500)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--with_deeplift", action="store_true",
+                    help="re-enable DeepLift (excluded: Captum rules not applied to HF modules, ~= InputXGrad)")
     ap.add_argument("--out", default="results/smoke")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
@@ -317,7 +320,7 @@ def main():
         lo, hi = np.percentile(bs, [2.5, 97.5])
         if not (lo <= 0 <= hi):
             bad.append(cell)
-    failed = [m for m in ["Attention", "InputXGrad", "IG", "DeepLift", "LIME"]
+    failed = [m for m in ["Attention", "InputXGrad", "IG", "LIME"] + (["DeepLift"] if args.with_deeplift else [])
               if m not in raw.columns or raw[m].isna().any()]
     print(f"\n[SANITY] Random_B vs Random indistinguishable in all cells: {not bad} {bad if bad else ''}")
     print(f"[SANITY] methods with failures/missing cells: {failed or 'none'}")
