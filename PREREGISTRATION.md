@@ -1,6 +1,8 @@
 # Pre-Registered Evaluation Plan — P1 (QPAIN 2027, Track 03)
 
-**Status:** v1.0. This replaces v0.2 (commit `4da125e`, which stays in git history) and was written **before any test-split data had been seen**. The amendment and its rationale are logged in `DEVIATIONS.md`.
+**Status:** v1.1 (2026-11-27). Replaces v1.0 (`bdf558c`) and v0.2 (`4da125e`); both stay in git history. Every amendment was made **before any test-split data had been seen**, and each is logged in `DEVIATIONS.md`.
+- v1.1 changes only the scoring metric, to the chance-corrected versions in §8.
+- The hypotheses, their direction, the contrasts and the decision rules are **unchanged**.
 **Rule:** No test-split data may be inspected or scored before v1.0 is committed. Every later change goes in `DEVIATIONS.md` (date, what changed, why), never by silent edit.
 
 ## 1. Working title
@@ -16,14 +18,14 @@ We use the shortcut protocol of Bastings et al. (2022): a planted word that full
 
 ## 3. Research questions and hypotheses (primary)
 - **RQ1. Does fragmentation hurt recovery?**
-  - **H1:** For at least one non-random attribution method, mean **subword-level** Precision@k is lower when the shortcut word is fragmented (≥ 4 pieces) than when it is 1 piece. This must hold in (a) the cross-tokenizer contrast **and** (b) at least one within-model contrast in the same direction.
+  - **H1:** For at least one non-random attribution method, mean **subword-level** chance-corrected Precision@k (cP@k, §8) is lower when the shortcut word is fragmented (≥ 4 pieces) than when it is 1 piece. This must hold in (a) the cross-tokenizer contrast **and** (b) at least one within-model contrast in the same direction.
   - Test: hierarchical bootstrap (seeds → examples), B = 10,000, 95% CI of the difference excludes 0. Holm correction across the 4 methods.
   - **Falsified if (a) fails for every method.**
 - **RQ2. Does word-level aggregation close the gap, and why?**
-  - **H2:** The fragmentation gap in Precision@k is smaller at word level than at subword level for at least one of `word_sum`, `word_max`, `word_mean`, with the CI of (gap_subword − gap_word) excluding 0.
+  - **H2:** The fragmentation gap in cP@k is smaller at word level than at subword level for at least one of `word_sum`, `word_max`, `word_mean`, with the CI of (gap_subword − gap_word) excluding 0.
   - **Pre-specified interpretation:** if `word_sum` closes the gap but `word_mean` does not, the closure is attributed to **sum inflation** on multi-piece words, not to better localization.
 - **RQ3. Is AOPC-comprehensiveness a valid proxy? (secondary; low power, reported as such)**
-  - **H3:** Agreement between the method ranking by ground-truth Precision@k and the ranking by AOPC-comprehensiveness (FA − Random) is lower in fragmented than in 1-piece conditions.
+  - **H3:** Agreement between the method ranking by ground-truth cP@k and the ranking by AOPC-comprehensiveness (FA − Random) is lower in fragmented than in 1-piece conditions.
   - Measured with Kendall τ over the 5 methods, with a 95% bootstrap CI over examples. Reported descriptively if the CI is wide.
 
 ## 4. Data
@@ -62,7 +64,16 @@ We use the shortcut protocol of Bastings et al. (2022): a planted word that full
 ## 8. Metrics
 - **Ground truth (Bastings et al., 2022):**
   - **Precision@k**, with k = number of ground-truth units: 1 at word level, number of pieces at subword level.
-  - **Coverage rank**, the rank at which all ground-truth units are covered. Normalized coverage rank = coverage rank ÷ number of units.
+  - **Coverage rank**, the rank at which all ground-truth units are covered. Normalized coverage rank = coverage rank ÷ N, where N is the number of units.
+- **Chance correction (v1.1; these are the PRIMARY scores).** For a uniformly random ranking of N units containing k ground-truth units:
+  - E[P@k] = k/N, and the expected normalized coverage rank is E_rand = k(N+1) / (N(k+1)).
+  - Both expectations grow with k, so raw scores are not comparable between 1-piece and multi-piece words. The validation smoke test showed this directly: the Random baseline's raw subword P@k was 0.28 for 4 pieces vs 0.11 for 1 piece.
+  - **cP@k = (P@k − k/N) / (1 − k/N)**
+  - **cCover = (E_rand − cover/N) / (E_rand − k/N)**
+  - In both, 1 = perfect, 0 = chance, and values below 0 are worse than chance.
+  - If N ≤ k the scores are undefined, and the example is excluded and counted.
+  - Both corrections were checked by Monte-Carlo simulation of random rankings (mean ≈ 0).
+  - Raw P@k and normalized coverage rank are still reported, as secondary.
 - **Proxy:** AOPC-Comprehensiveness over k ∈ {10, 20, 50}% of units, reported as FA − Random.
   - Operators: delete (primary), mask token, zero-embedding (secondary).
 

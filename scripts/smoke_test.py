@@ -222,11 +222,24 @@ def gt_metrics(us, groups, gt_pos):
     if not gt_units:
         return None
     order = list(np.argsort(-us, kind="stable"))
-    k = len(gt_units)
+    k, N = len(gt_units), len(order)
     p_at_k = len(set(order[:k]) & set(gt_units)) / k
     rank_of = {u: r + 1 for r, u in enumerate(order)}
     cover = max(rank_of[u] for u in gt_units)
-    return {"p_at_k": p_at_k, "k": k, "cover_rank": cover, "norm_rank": cover / len(order)}
+    out = {"p_at_k": p_at_k, "k": k, "N": N, "cover_rank": cover, "norm_rank": cover / N}
+    # v1.1 chance correction (PREREGISTRATION §8). Under a uniformly random ranking of N units with
+    # k ground-truth units: E[P@k] = k/N; E[max rank of the k GT units] = k(N+1)/(k+1), so the
+    # normalized expectation is E_rand = k(N+1)/(N(k+1)). Best possible normalized cover = k/N.
+    # Corrected scores: 1 = perfect, 0 = chance, < 0 = worse than chance. Undefined if N <= k.
+    if N <= k:
+        out["cp_at_k"] = out["c_cover"] = np.nan
+    else:
+        e_p = k / N
+        e_cov = k * (N + 1) / (N * (k + 1))
+        best = k / N
+        out["cp_at_k"] = (p_at_k - e_p) / (1 - e_p)
+        out["c_cover"] = (e_cov - cover / N) / (e_cov - best)
+    return out
 
 
 def run_shortcut(args):
@@ -318,21 +331,25 @@ def run_shortcut(args):
               f"{'OK' if r.max() - r.min() <= args.match_tol else 'MISMATCH'}")
     if gt.empty:
         print("[STOP] no reliant examples; nothing to evaluate"); return
-    pk = gt.groupby(["model", "cond", "pieces", "gran", "method"])["p_at_k"].mean().unstack("method")
-    nr = gt.groupby(["model", "cond", "pieces", "gran", "method"])["norm_rank"].mean().unstack("method")
-    print("\nPrecision@k vs ground truth (SMOKE, NOT RESULTS):\n", pk.round(3).to_string())
-    print("\nNormalized coverage rank (lower = better):\n", nr.round(3).to_string())
+    g = ["model", "cond", "pieces", "gran", "method"]
+    pk = gt.groupby(g)["cp_at_k"].mean().unstack("method")      # v1.1 PRIMARY: chance-corrected
+    cc = gt.groupby(g)["c_cover"].mean().unstack("method")
+    raw = gt.groupby(g)["p_at_k"].mean().unstack("method")
+    print("\nChance-corrected Precision@k (1 = perfect, 0 = chance) (SMOKE, NOT RESULTS):\n", pk.round(3).to_string())
+    print("\nChance-corrected coverage rank (1 = perfect, 0 = chance):\n", cc.round(3).to_string())
+    print("\nRaw Precision@k (secondary; not comparable across piece counts):\n", raw.round(3).to_string())
+    print(f"[info] examples excluded because N <= k: {int(gt['cp_at_k'].isna().sum())} rows")
     aopc = cp.groupby(["model", "cond", "gran", "op", "method", "ex"])["comp"].mean().reset_index()
     ao = aopc.groupby(["model", "cond", "gran", "op", "method"])["comp"].mean().unstack("method")
     ao = ao.sub(ao["Random"], axis=0)
     agree = []
-    for (m, c, g), sub in pk.reset_index().groupby(["model", "cond", "gran"]):
+    for (m, c, gg), sub in pk.reset_index().groupby(["model", "cond", "gran"]):
         meths = [x for x in pk.columns if x != "Random_B"]
         gts = sub[meths].iloc[0]
         for op in OPS:
-            if (m, c, g, op) in ao.index:
-                tau = kendalltau(gts.values, ao.loc[(m, c, g, op), meths].values)[0]
-                agree.append({"model": m, "cond": c, "gran": g, "op": op, "kendall_tau(P@k, AOPC-comp)": tau})
+            if (m, c, gg, op) in ao.index:
+                tau = kendalltau(gts.values, ao.loc[(m, c, gg, op), meths].values)[0]
+                agree.append({"model": m, "cond": c, "gran": gg, "op": op, "kendall_tau(P@k, AOPC-comp)": tau})  # P@k = chance-corrected
     ag = pd.DataFrame(agree); ag.to_csv(os.path.join(args.out, "agreement_gt_vs_aopc.csv"), index=False)
     print("\nAgreement of AOPC-comprehensiveness with ground truth (method ranking, Kendall tau):\n",
           ag.pivot_table(index=["model", "cond", "gran"], columns="op",
