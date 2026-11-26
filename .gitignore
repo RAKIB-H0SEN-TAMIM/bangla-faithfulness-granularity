@@ -1,0 +1,14 @@
+# data: never commit dataset text (license/redistribution); commit only hashes + audit summaries
+data/raw/
+data/splits/**/*.jsonl
+data/splits/**/fertility_per_example.csv
+# results: commit only summary CSVs explicitly
+results/**
+!results/compute_log.csv
+# secrets / env
+.env
+kaggle.json
+*.token
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
