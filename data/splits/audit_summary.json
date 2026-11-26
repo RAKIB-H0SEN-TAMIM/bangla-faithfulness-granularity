@@ -1,0 +1,115 @@
+{
+ "massive_bn": {
+  "source": "AmazonScience/massive:bn-BD",
+  "raw_sizes": {
+   "train": 11514,
+   "val": 2033,
+   "test": 2974
+  },
+  "label_conflicts_within_split": 22,
+  "n_classes": 60,
+  "splits": {
+   "train": {
+    "n": 11201,
+    "min_class": 4,
+    "max_class": 805,
+    "missing_classes": []
+   },
+   "val": {
+    "n": 1925,
+    "min_class": 2,
+    "max_class": 129,
+    "missing_classes": [
+     "audio_volume_other"
+    ]
+   },
+   "test": {
+    "n": 2790,
+    "min_class": 1,
+    "max_class": 205,
+    "missing_classes": [
+     "cooking_query"
+    ]
+   }
+  },
+  "removed": {
+   "train: within-split exact duplicate": 313,
+   "val: within-split exact duplicate": 17,
+   "test: within-split exact duplicate": 33,
+   "val: exact dup of": 87,
+   "test: exact dup of": 148,
+   "val: near dup (J>=0.9) of": 4,
+   "test: near dup (J>=0.9) of": 3
+  },
+  "fertility": {
+   "banglabert": {
+    "fertility_mean": 1.173,
+    "fertility_median": 1.077,
+    "fertility_p90": 1.5,
+    "split_ratio_mean": 0.128,
+    "pct_truncated_at_128": 0.0
+   },
+   "xlmr": {
+    "fertility_mean": 1.745,
+    "fertility_median": 1.667,
+    "fertility_p90": 2.4,
+    "split_ratio_mean": 0.413,
+    "pct_truncated_at_128": 0.0
+   }
+  }
+ },
+ "bdshs": {
+  "source": "kaggle-csv (official splits)",
+  "raw_sizes": {
+   "train": 40224,
+   "val": 5028,
+   "test": 5029
+  },
+  "label_conflicts_within_split": 5,
+  "n_classes": 2,
+  "splits": {
+   "train": {
+    "n": 40138,
+    "min_class": 19291,
+    "max_class": 20847,
+    "missing_classes": []
+   },
+   "val": {
+    "n": 5005,
+    "min_class": 2407,
+    "max_class": 2598,
+    "missing_classes": []
+   },
+   "test": {
+    "n": 4992,
+    "min_class": 2400,
+    "max_class": 2592,
+    "missing_classes": []
+   }
+  },
+  "removed": {
+   "train: within-split exact duplicate": 86,
+   "test: within-split exact duplicate": 3,
+   "val: exact dup of": 22,
+   "test: exact dup of": 31,
+   "val: near dup (J>=0.9) of": 1,
+   "test: near dup (J>=0.9) of": 3
+  },
+  "fertility": {
+   "banglabert": {
+    "fertility_mean": 1.363,
+    "fertility_median": 1.25,
+    "fertility_p90": 1.714,
+    "split_ratio_mean": 0.253,
+    "pct_truncated_at_128": 0.58
+   },
+   "xlmr": {
+    "fertility_mean": 2.012,
+    "fertility_median": 1.906,
+    "fertility_p90": 2.6,
+    "split_ratio_mean": 0.568,
+    "pct_truncated_at_128": 1.45
+   }
+  }
+ }
+}
